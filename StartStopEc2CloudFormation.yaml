@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Start/stop EC2 instances
+Parameters:
+  CronStartParameter:
+    Type: String
+    Default: "cron(0 13 ? * MON-FRI *)"
+    Description: Enter cron expression for starting instances (default 8am CT).
+  CronStopParameter:
+    Type: String
+    Default: "cron(0 23 ? * MON-FRI *)"
+    Description: Enter cron expression for stopping instances (default 6pm CT).
+  S3BucketParameter:
+    Type: String
+    Default: "textmethod-cc"
+    Description: S3 bucket containing Lambda functions
+  StartLambdaS3KeyParameter:
+    Type: String
+    Default: "cf/aws_ec2_start_deploy.zip"
+    Description: Start lambda function code location key
+  StopLambdaS3KeyParameter:
+    Type: String
+    Default: "cf/aws_ec2_stop_deploy.zip"
+    Description: Stop lambda function code location key
+Resources:
+  BaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+      Path: /
+      RoleName: StartStopEc2Role
+  BasePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: StartStopEc2Policy
+      PolicyDocument:
+        Statement:
+        - Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Effect: Allow
+          Resource: arn:aws:logs:*:*:*
+        - Action:
+          - ec2:Start*
+          - ec2:Stop*
+          - ec2:Describe*
+          Effect: Allow
+          Resource: '*'
+        Version: '2012-10-17'
+      Roles:
+      - !Ref BaseRole
+  StartLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: StartEc2Instances
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+          - BaseRole
+          - Arn
+      Code:
+        S3Bucket:
+          Ref: S3BucketParameter
+        S3Key:
+          Ref: StartLambdaS3KeyParameter
+      Runtime: python3.8
+      Timeout: 10
+      TracingConfig:
+        Mode: PassThrough
+  StopLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: StopEc2Instances
+      Handler: lambda_function.lambda_handler
+      Role:
+        Fn::GetAtt:
+          - BaseRole
+          - Arn
+      Code:
+        S3Bucket:
+          Ref: S3BucketParameter
+        S3Key:
+          Ref: StopLambdaS3KeyParameter
+      Runtime: python3.8
+      Timeout: 10
+      TracingConfig:
+        Mode: PassThrough
+  StartScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: "Start-Ec2-Instances-Event"
+      ScheduleExpression:
+        Ref: CronStartParameter
+      State: "ENABLED"
+      Targets:
+        -
+          Arn:
+            Fn::GetAtt:
+              - "StartLambda"
+              - "Arn"
+          Id: "TargetFunctionV1"
+  StopScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: "Stop-Ec2-Instances-Event"
+      ScheduleExpression:
+        Ref: CronStopParameter
+      State: "ENABLED"
+      Targets:
+        -
+          Arn:
+            Fn::GetAtt:
+              - "StopLambda"
+              - "Arn"
+          Id: "TargetFunctionV1"
+  PermissionForEventsToInvokeLambdaStart:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref "StartLambda"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "StartScheduledRule"
+          - "Arn"
+  PermissionForEventsToInvokeLambdaStop:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref "StopLambda"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "StopScheduledRule"
+          - "Arn"
